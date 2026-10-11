@@ -1,0 +1,114 @@
+# TraceraTesting
+
+Tracera Autotest adapter for [Swift Testing](https://developer.apple.com/xcode/swift-testing/).
+
+**Requires Swift ≥ 6** (macOS 15 / Xcode 16).
+
+```swift
+// Package.swift
+.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "0.1.0"),
+// …
+.product(name: "TraceraTesting", package: "tracera-swift"),
+```
+
+How-to: [Swift Testing](https://tracera.dev/docs/swift-testing). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters).
+
+Call `install()` once. If you bind with `.traceraId` or `.tracera`, those traits call `install()` for you:
+
+```swift
+import Testing
+import Tracera
+import TraceraTesting
+
+install()
+```
+
+## Bind
+
+Preferred declarative bind:
+
+```swift
+@Test("checkout", .traceraId(42))
+func checkout() {
+  // …
+}
+
+@Test("login as {user}", .traceraId(42), arguments: ["alice", "bob"])
+func login(user: String) {
+  // …
+}
+```
+
+When the id is not a compile-time constant, open a pin with `.tracera` and bind imperatively:
+
+```swift
+@Test("checkout", .tracera)
+func checkout() {
+  Tracera.testCase(42)
+  // Tracera.testCase(42, "e2e/checkout")
+}
+```
+
+A test that never binds reports nothing.
+
+## Skip
+
+Use `skip("reason")` so the reason is added to the result as `comment`:
+
+```swift
+@Test("checkout", .traceraId(42))
+func checkout() throws {
+  try skip("needs a seeded account")
+}
+```
+
+## Steps
+
+Use `Tracera.step("…") { … }` (sync or `async`). Steps inside `setup` / `teardown` go to **Setup** / **Teardown**; other steps go to **Test**.
+
+```swift
+@Test("checkout", .traceraId(10))
+func checkout() throws {
+  try setup("open shop") {}
+  try Tracera.step("add item") {
+    Tracera.step("nested leaf") {}
+  }
+  try teardown("close shop") {}
+}
+```
+
+## Comments, errors, and attachments
+
+`Tracera.comment`, `Tracera.error`, and attachments are added to the open step, or to the result when no step is open. `Tracera.attachmentFile` takes a file path; `Tracera.attachmentBytes` takes a name and bytes (MIME type is optional). Attachments upload when the result is reported. Shared placement and `Tracera.error` rules: https://tracera.dev/docs/adapters.
+
+```swift
+Tracera.comment("result-level note")
+Tracera.error("result-level error")
+Tracera.attachmentFile("Fixtures/screenshot.png")
+Tracera.step("open login") {
+  Tracera.comment("step note")
+  Tracera.attachmentBytes("body.json", data: Data(#"{"ok":true}"#.utf8), mimeType: "application/json")
+}
+```
+
+If you start a `Task` and call Tracera APIs there, call `getContext()` in the test first and run the worker with `runWithContext` — otherwise those calls are not reported:
+
+```swift
+let ctx = getContext()
+Task {
+  await runWithContext(ctx) {
+    Tracera.step("worker") { /* ... */ }
+  }
+}
+```
+
+## Parameterized
+
+Swift Testing arguments expand into separate cases. Put `{param}` / `{0}` / named placeholders in the `@Test("…")` display name so each row gets a distinct `autotestName`:
+
+```swift
+@Test("login as {user}", .traceraId(7), arguments: ["alice", "bob"])
+func login(user: String) {
+  Tracera.step("sign in") { /* ... */ }
+}
+```

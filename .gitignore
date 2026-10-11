@@ -1,0 +1,8 @@
+# SPM / Xcode local artifacts (public mirror + private swift/)
+.build/
+.swiftpm/
+Package.resolved
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+.DS_Store
