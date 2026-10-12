@@ -20,31 +20,16 @@ public struct TraceraScopeTrait: TestTrait, SuiteTrait, TestScoping, Sendable {
     let template = resolvedBindTemplate(nameTemplate: nil, test: test)
     let displayName = formatBindName(template, params: params)
     let ctx = createTestContext(testCaseId: 0, autotestName: displayName)
-    let activeId = "\(String(describing: test.id)):\(testCase.map { String(describing: $0) } ?? "0")"
+    let activeId = activeTestID(test: test, testCase: testCase)
     beginActive(id: activeId, ctx: ctx)
 
-    try await runWithContext(ctx) {
-      setPhase(.test)
-      do {
-        try await function()
-        if ctx.payloadHasFailedStep {
-          markActiveFailed(id: activeId)
-        }
-      } catch is CancellationError {
-        if ctx.resultCommentText.isEmpty {
-          markActiveSkipped(id: activeId, reason: "cancelled")
-        } else {
-          markActiveSkipped(id: activeId, reason: ctx.resultCommentText)
-        }
-        endActive(id: activeId)
-        throw CancellationError()
-      } catch {
-        ctx.recordFailure(formatFailureText(error))
-        markActiveFailed(id: activeId)
-        endActive(id: activeId)
-        throw error
-      }
-    }
+    try await runTraceraScoped(
+      ctx: ctx,
+      activeId: activeId,
+      test: test,
+      testCase: testCase,
+      function: function
+    )
 
     endActive(id: activeId)
   }

@@ -30,20 +30,36 @@ package func captureStack(skipFrames: Int = 2) -> String {
 }
 
 package func formatFailureText(_ error: Any?, stack: String? = nil) -> String {
-  let captured = stack ?? captureStack()
   if error == nil {
-    return stripAnsi(captured).trimmingCharacters(in: .whitespacesAndNewlines)
+    // Caller passed no error — do not invent a stack-only failure text.
+    guard let stack else { return "" }
+    return stripAnsi(stack).trimmingCharacters(in: .whitespacesAndNewlines)
   }
+  let captured = stack ?? captureStack()
   if let text = error as? String {
     return stripAnsi(joinMessageStack(text, captured))
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
   if let err = error as? Error {
-    return stripAnsi(joinMessageStack(String(describing: err), captured))
+    let message = errorMessage(err)
+    return stripAnsi(joinMessageStack(message, captured))
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
   return stripAnsi(joinMessageStack(String(describing: error!), captured))
     .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func errorMessage(_ error: Error) -> String {
+  if let localized = error as? LocalizedError, let desc = localized.errorDescription, !desc.isEmpty {
+    return desc
+  }
+  let ns = error as NSError
+  if !ns.localizedDescription.isEmpty,
+    ns.localizedDescription != "The operation couldn’t be completed. (\(ns.domain) error \(ns.code).)"
+  {
+    return ns.localizedDescription
+  }
+  return String(describing: error)
 }
 
 package func normalizeSkipReason(_ reason: String?) -> String {

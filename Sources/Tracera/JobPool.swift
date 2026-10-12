@@ -77,13 +77,16 @@ package final class JobPool: Sendable {
   }
 
   private func start(_ job: @escaping @Sendable () async -> Void) {
-    Task {
+    // Detached so XCTest / Swift Testing cancellation of a failing test does
+    // not abort in-flight uploads from earlier results (NSURLErrorCancelled
+    // would otherwise soft-disable the whole run).
+    Task.detached { [self] in
       await job()
       let (more, waiters): ([@Sendable () async -> Void], [CheckedContinuation<Void, Never>]) =
-        state.withLock { s in
+        self.state.withLock { s in
           s.active -= 1
           s.outstanding -= 1
-          let more = takeRunnableLocked(&s)
+          let more = self.takeRunnableLocked(&s)
           if s.outstanding == 0 {
             let pending = s.waiters
             s.waiters.removeAll()
@@ -93,7 +96,7 @@ package final class JobPool: Sendable {
         }
       for w in waiters { w.resume() }
       for next in more {
-        start(next)
+        self.start(next)
       }
     }
   }

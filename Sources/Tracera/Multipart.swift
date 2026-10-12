@@ -1,7 +1,7 @@
 import Foundation
 
 #if canImport(Darwin)
-import Darwin
+  import Darwin
 #endif
 
 /// Frames a blob as single-part `multipart/form-data` with a known length.
@@ -21,29 +21,39 @@ package struct MultipartBody: Sendable {
 
 package func openMultipart(fileName: String, mimeType: String, path: String?, data: Data?) throws -> MultipartBody {
   let boundary = "tracera-\(UUID().uuidString)"
-  let safeName = fileName
+  let safeName =
+    fileName
     .replacingOccurrences(of: "\r", with: "")
     .replacingOccurrences(of: "\n", with: "")
     .replacingOccurrences(of: "\"", with: "\\\"")
   let head = Data(
-    (
-      "--\(boundary)\r\n"
-        + "Content-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\n"
-        + "Content-Type: \(mimeType)\r\n"
-        + "\r\n"
-    ).utf8
+    ("--\(boundary)\r\n"
+      + "Content-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\n"
+      + "Content-Type: \(mimeType)\r\n"
+      + "\r\n").utf8
   )
   let tail = Data("\r\n--\(boundary)--\r\n".utf8)
   let contentType = "multipart/form-data; boundary=\(boundary)"
 
   if let path, !path.isEmpty {
     var isDir: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
-      throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT), userInfo: [
-        NSLocalizedDescriptionKey: "ENOENT: \(path)",
-      ])
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+      throw NSError(
+        domain: NSPOSIXErrorDomain, code: Int(ENOENT),
+        userInfo: [
+          NSLocalizedDescriptionKey: "ENOENT: \(path)"
+        ])
     }
-    let attrs = try FileManager.default.attributesOfItem(atPath: path)
+    // Readable-file check before open — EACCES/ENOENT fail once (no upload retry).
+    guard fm.isReadableFile(atPath: path) else {
+      throw NSError(
+        domain: NSPOSIXErrorDomain, code: Int(EACCES),
+        userInfo: [
+          NSLocalizedDescriptionKey: "EACCES: \(path)"
+        ])
+    }
+    let attrs = try fm.attributesOfItem(atPath: path)
     let fileLength = (attrs[.size] as? NSNumber)?.intValue ?? 0
     let total = head.count + fileLength + tail.count
     let stream = MultipartReadStream(head: head, filePath: path, fileLength: fileLength, tail: tail)

@@ -13,7 +13,7 @@ Tracera Autotest adapter for XCTest / XCUITest.
 
 How-to: [XCUITest](https://tracera.dev/docs/xcuitest). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters).
 
-Subclass **`TraceraXCTestCase`** and call **`install()`** once (for example in `class setUp`). Without `install()`, nothing is reported. Media capture defaults to off — pass modes only when you want automatic screenshots / hierarchy / logs (see Screenshots):
+Subclass **`TraceraXCTestCase`** and call **`install()`** once in **`class func setUp()`**. Without `install()`, nothing is reported. Media capture defaults to off — pass modes only when you want automatic screenshots / hierarchy / logs (see Screenshots):
 
 ```swift
 import XCTest
@@ -28,7 +28,7 @@ final class CheckoutUITests: TraceraXCTestCase {
 }
 ```
 
-When you override `setUp` / `tearDown`, call `super.setUp()` at the **end** of `setUp` and `super.tearDown()` at the **start** of `tearDown` so steps land in **Setup** / **Test** / **Teardown**.
+When you override **instance** `setUp` / `tearDown` (once per test — not `class func setUp`), call `super.setUp()` at the **end** of `setUp` and `super.tearDown()` at the **start** of `tearDown` so steps land in **Setup** / **Test** / **Teardown**.
 
 ## Bind
 
@@ -42,11 +42,18 @@ func testCheckout() {
 }
 ```
 
-If `name` is omitted, `autotestName` takes the value of the XCTest test name. You can bind in `setUp` instead when several methods share one case id. A test that never binds reports nothing.
+If `name` is omitted, `autotestName` takes the value of the XCTest test name. You can bind in instance `setUp` instead when several methods share one case id. A test that never binds reports nothing.
 
 ## Skip
 
-Use `XCTSkip` / `XCTSkipIf` so the result is reported as **Skipped**. Optional: set a result `comment` with `Tracera.comment` before calling skip.
+Use `skip("reason")` so the reason is added to the result as `comment`:
+
+```swift
+func testCheckout() throws {
+  Tracera.testCase(42)
+  try skip("needs a seeded account")
+}
+```
 
 ## Steps
 
@@ -100,6 +107,10 @@ Task {
 }
 ```
 
+## Parameterized
+
+Use a literal `Tracera.testCase(id, name)` (or omit `name` → XCTest test name).
+
 ## Screenshots and media
 
 `install()` is required for reporting (see above). Use its parameters to attach media at the **end** of each test (default `.off`): `screenshots:` — `.onFailure` / `.onSuccess` / `.always` (iOS/tvOS: `XCUIScreen`; macOS: ScreenCaptureKit when screen recording is allowed); `hierarchy:` → `window-hierarchy.txt`; `logs:` → `device-log.txt` (unified log / `OSLogStore`).
@@ -119,5 +130,3 @@ Tracera.step("after login") {
   attachDeviceLog()
 }
 ```
-
-XCTest does not expose `XCTAttachment` payloads to observers — use `Tracera.attachmentFile` / `Tracera.attachmentBytes` for intentional dumps.

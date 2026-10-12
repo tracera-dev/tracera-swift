@@ -62,10 +62,12 @@ private func emptyPmDoc(_ text: String) -> [String: Any] {
   }
   return [
     "type": "doc",
-    "content": [[
-      "type": "paragraph",
-      "content": [["type": "text", "text": text]],
-    ]],
+    "content": [
+      [
+        "type": "paragraph",
+        "content": [["type": "text", "text": text]],
+      ]
+    ],
   ]
 }
 
@@ -81,6 +83,7 @@ public final class TestContext: @unchecked Sendable {
   private var nextStepId = 1
   private var hasFailedStep = false
   private var hasStepError = false
+  private var skipped = false
   private var stepStack: [StepNode] = []
   private var roots: [StepSection: [StepNode]] = [
     .setup: [], .test: [], .teardown: [],
@@ -96,37 +99,57 @@ public final class TestContext: @unchecked Sendable {
 
   public var autotestName: String {
     get {
-      lock.lock(); defer { lock.unlock() }
+      lock.lock()
+      defer { lock.unlock() }
       return _autotestName
     }
     set {
-      lock.lock(); defer { lock.unlock() }
+      lock.lock()
+      defer { lock.unlock() }
       _autotestName = truncate(newValue, 128)
     }
   }
 
   package var resultCommentText: String {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return resultComment
   }
 
   package var payloadHasFailedStep: Bool {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return hasFailedStep
   }
 
   package var payloadHasStepError: Bool {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return hasStepError
   }
 
+  package var hasResultError: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return !resultError.isEmpty
+  }
+
+  /// True after ``markSkipped`` — used so skip teardown is not treated as a fail.
+  package var isSkipped: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return skipped
+  }
+
   package func setTestCaseId(_ id: Int) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     testCaseId = id
   }
 
   package func recordFailure(_ text: String) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     let cleaned = stripAnsi(text).trimmingCharacters(in: .whitespacesAndNewlines)
     guard !cleaned.isEmpty else { return }
     if let current = stepStack.last {
@@ -141,6 +164,7 @@ public final class TestContext: @unchecked Sendable {
 
   package func markSkipped(_ reason: String) {
     lock.lock()
+    skipped = true
     let cleaned = normalizeSkipReason(reason)
     if !cleaned.isEmpty {
       resultComment = appendText(resultComment, cleaned)
@@ -165,11 +189,14 @@ public final class TestContext: @unchecked Sendable {
       }
     }
     lock.unlock()
-    pendingIds.forEach { PendingBlobs.discard(id: $0) }
+    for id in pendingIds {
+      PendingBlobs.discard(id: id)
+    }
   }
 
   package func addComment(_ text: String) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !cleaned.isEmpty else { return }
     if let current = stepStack.last {
@@ -180,7 +207,8 @@ public final class TestContext: @unchecked Sendable {
   }
 
   package func addError(_ text: String) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     let cleaned = stripAnsi(text).trimmingCharacters(in: .whitespacesAndNewlines)
     guard !cleaned.isEmpty else { return }
     if let current = stepStack.last {
@@ -192,7 +220,8 @@ public final class TestContext: @unchecked Sendable {
   }
 
   package func addAttachment(_ meta: AttachmentMeta) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     let wire = meta.toWire()
     if let current = stepStack.last {
       if current.attachments.count < maxAttachments {
@@ -254,7 +283,8 @@ public final class TestContext: @unchecked Sendable {
   }
 
   package func beginStep(title: String) -> Int {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     let id = nextStepId
     nextStepId += 1
     let parent = stepStack.last
@@ -275,7 +305,8 @@ public final class TestContext: @unchecked Sendable {
   }
 
   package func endStep(failed: Bool, errorMessage: String? = nil) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     guard let node = stepStack.popLast() else { return }
     if failed {
       node.result = "Failed"
@@ -290,7 +321,8 @@ public final class TestContext: @unchecked Sendable {
   }
 
   package func snapshotPayload() -> [String: Any] {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     /// Flat preorder (parent then children) — same wire shape as JS/Go/Dart.
     func flatten(_ nodes: [StepNode]) -> [[String: Any]] {
       var out: [[String: Any]] = []
@@ -343,6 +375,13 @@ private enum ContextStorage {
   static let lock = NSLock()
 }
 
+/// Optional runner hook that returns the pin for the host's current test.
+///
+/// Used by XCUITest when several cases may overlap: the process-wide fallback
+/// would race, so the observer resolves the active case here. Cleared when
+/// reporting ends. TaskLocal pins from ``runWithContext`` still win.
+package nonisolated(unsafe) var resolveHostContext: (() -> TestContext?)?
+
 package func installContext(_ ctx: TestContext?) {
   ContextStorage.lock.lock()
   ContextStorage.processContext = ctx
@@ -359,9 +398,16 @@ package func clearContext(_ ctx: TestContext?) {
   ContextStorage.lock.unlock()
 }
 
-/// Returns the pin for the current task, or the process fallback.
+/// Returns the pin for the current task, host resolver, or process fallback.
+///
+/// When a host resolver is installed (Testing / XCUITest), a `nil` host result
+/// means unbound — do **not** fall through to the process slot (that races under
+/// in-process parallel). Process fallback is only for callers with no resolver.
 public func getContext() -> TestContext? {
   if let ctx = ContextStorage.taskContext { return ctx }
+  if let resolver = resolveHostContext {
+    return resolver()
+  }
   ContextStorage.lock.lock()
   let process = ContextStorage.processContext
   ContextStorage.lock.unlock()

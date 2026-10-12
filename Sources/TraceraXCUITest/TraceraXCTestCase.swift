@@ -14,9 +14,20 @@ import XCTest
 /// new suites should inherit this type instead.
 open class TraceraXCTestCase: XCTestCase {
   /// Re-assert Setup before XCTest runs `setUp` (observer also starts in Setup).
+  ///
+  /// Also pins TaskLocal for the whole invoke so `await` hops keep reporting
+  /// under in-process parallel (thread-dictionary + host resolver alone drop
+  /// when the continuation resumes on another thread and more than one case
+  /// is active).
   open override func invokeTest() {
     setPhase(.setup)
-    super.invokeTest()
+    if let ctx = getContext() {
+      runWithContext(ctx) {
+        super.invokeTest()
+      }
+    } else {
+      super.invokeTest()
+    }
   }
 
   open override func setUp() {

@@ -13,16 +13,12 @@ private let allowPrefix = [
 ]
 
 /// Harness noise an allowed prefix would otherwise let through.
-private let denyExact: Set<String> = [
-  "GINKGO_EDITOR_INTEGRATION",
-  "GINKGO_PARALLEL_PROTOCOL",
-  "GINKGO_PRESERVE_CACHE",
-  "GINKGO_PRUNE_STACK",
-  "GINKGO_TIME_FORMAT",
-  "GODOG_FEATURES",
-  "GODOG_SEED",
-  "GODOG_TESTED_PACKAGE",
-]
+///
+/// Allowlist-first: keys no prefix admits (`HOME`, `PATH`, `SIMCTL_*`, …) need
+/// no entry. Add a runner's noisy keys only when that runner's prefix joins
+/// ``allowPrefix`` (Go keeps GINKGO_/GODOG_ denials because those prefixes are
+/// allowed there — Swift does not).
+private let denyExact: Set<String> = []
 
 private let maxKeyChars = 128
 private let maxValueChars = 4096
@@ -53,29 +49,46 @@ package func snapshotEnvVars(_ env: [String: String]? = nil) -> [String: String]
 
 package func osLabel() -> String {
   #if os(macOS)
-  return "macOS"
+    return "macOS"
   #elseif os(Windows)
-  return "Windows"
+    return "Windows"
   #elseif os(Linux)
-  return "Linux"
+    return "Linux"
   #else
-  return "unknown"
+    return "unknown"
   #endif
 }
 
 package func archLabel() -> String {
   #if arch(arm64)
-  return "arm64"
+    return "arm64"
   #elseif arch(x86_64)
-  return "x86_64"
+    return "x86_64"
   #else
-  return "unknown"
+    return "unknown"
   #endif
 }
 
+/// Compiler floor baked at build time (iOS simulators cannot spawn `swift`).
+private let compiledSwiftVersion: String = {
+  #if compiler(>=6.4)
+    return "6.4"
+  #elseif compiler(>=6.3)
+    return "6.3"
+  #elseif compiler(>=6.2)
+    return "6.2"
+  #elseif compiler(>=6.1)
+    return "6.1"
+  #elseif compiler(>=6.0)
+    return "6"
+  #else
+    return "5"
+  #endif
+}()
+
 package func swiftVersionLabel(_ env: [String: String] = envMap()) -> String {
   let raw = (env["SWIFT_VERSION"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-  return raw.isEmpty ? "6" : raw
+  return raw.isEmpty ? compiledSwiftVersion : raw
 }
 
 /// Synthetic Env keys (`OS` / `ARCH` / `SWIFT_VERSION`) plus runner extras.

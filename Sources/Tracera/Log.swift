@@ -1,9 +1,9 @@
 import Foundation
 
 #if canImport(Darwin)
-import Darwin
+  import Darwin
 #elseif canImport(Glibc)
-import Glibc
+  import Glibc
 #endif
 
 /// Verbosity of the adapter's own log lines (`TRACERA_LOG_LEVEL`).

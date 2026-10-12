@@ -7,6 +7,7 @@ import Tracera
 /// ```swift
 /// @Test("login", .traceraId(101))
 /// @Test("login as {user}", .traceraId(101), arguments: ["alice", "bob"])
+/// @Test("login", .traceraId(101, name: "login as {user}"), arguments: ["alice", "bob"])
 /// func login(user: String) { … }
 /// ```
 public struct TraceraIdTrait: TestTrait, SuiteTrait, TestScoping, Sendable {
@@ -32,32 +33,16 @@ public struct TraceraIdTrait: TestTrait, SuiteTrait, TestScoping, Sendable {
     let displayName = formatBindName(template, params: params)
 
     let ctx = createTestContext(testCaseId: testCaseId, autotestName: displayName)
-    let activeId = "\(String(describing: test.id)):\(testCase.map { String(describing: $0) } ?? "0")"
+    let activeId = activeTestID(test: test, testCase: testCase)
     beginActive(id: activeId, ctx: ctx)
 
-    try await runWithContext(ctx) {
-      setPhase(.test)
-      do {
-        try await function()
-        if ctx.payloadHasFailedStep {
-          markActiveFailed(id: activeId)
-        }
-      } catch is CancellationError {
-        // `skip(_:)` already wrote the reason onto the context; keep it.
-        if ctx.resultCommentText.isEmpty {
-          markActiveSkipped(id: activeId, reason: "cancelled")
-        } else {
-          markActiveSkipped(id: activeId, reason: ctx.resultCommentText)
-        }
-        endActive(id: activeId)
-        throw CancellationError()
-      } catch {
-        ctx.recordFailure(formatFailureText(error))
-        markActiveFailed(id: activeId)
-        endActive(id: activeId)
-        throw error
-      }
-    }
+    try await runTraceraScoped(
+      ctx: ctx,
+      activeId: activeId,
+      test: test,
+      testCase: testCase,
+      function: function
+    )
 
     endActive(id: activeId)
   }

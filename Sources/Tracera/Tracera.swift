@@ -26,7 +26,14 @@ public enum Tracera {
       ctx.endStep(failed: false)
       return value
     } catch {
-      ctx.endStep(failed: true, errorMessage: formatFailureText(error))
+      // Mid-test `skip` marks the context then throws a runner-local error
+      // (`TraceraSkipError` / `XCTSkip`) core cannot name — close without fail.
+      // Bare `CancellationError` keeps the same non-fail close.
+      if ctx.isSkipped || error is CancellationError {
+        ctx.endStep(failed: false)
+      } else {
+        ctx.endStep(failed: true, errorMessage: formatFailureText(error))
+      }
       throw error
     }
   }
@@ -41,7 +48,11 @@ public enum Tracera {
       ctx.endStep(failed: false)
       return value
     } catch {
-      ctx.endStep(failed: true, errorMessage: formatFailureText(error))
+      if ctx.isSkipped || error is CancellationError {
+        ctx.endStep(failed: false)
+      } else {
+        ctx.endStep(failed: true, errorMessage: formatFailureText(error))
+      }
       throw error
     }
   }

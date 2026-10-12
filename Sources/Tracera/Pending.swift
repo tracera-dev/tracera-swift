@@ -57,7 +57,9 @@ package enum PendingBlobs {
 
   package static func discardPendingFromPayload(_ payload: [String: Any]?) {
     guard let payload else { return }
-    collectPendingIds(payload).forEach { discard(id: $0) }
+    for id in collectPendingIds(payload) {
+      discard(id: id)
+    }
   }
 
   /// Unlink an adapter-owned temp path (after upload or on discard).
@@ -68,7 +70,8 @@ package enum PendingBlobs {
 
   /// Test / diagnostics — number of bodies still held.
   package static var count: Int {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return store.count
   }
 
@@ -85,7 +88,8 @@ package enum PendingBlobs {
 
   /// Peek without taking (tests).
   package static func peek(id: String) -> PendingBlob? {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return store[id]
   }
 }

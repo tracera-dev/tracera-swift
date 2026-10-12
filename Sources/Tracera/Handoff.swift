@@ -1,13 +1,17 @@
-import Foundation
 import CryptoKit
+import Foundation
+
 #if canImport(Darwin)
-import Darwin
+  import Darwin
 #endif
 
 /// How old a lock file may get before it is treated as left behind.
 private let handoffLockStaleAfter: TimeInterval = 90
 /// How long a `.id` file may sit before the next claim creates a fresh run.
 private let handoffIdStaleAfter: TimeInterval = 24 * 60 * 60
+/// Wait for the peer lock (Dart/JS parity — covers `createRun` / `finishRun` hold).
+private let handoffLockWaitAttempts = 2_400
+private let handoffLockWaitSleepNs: UInt64 = 25_000_000
 
 /// Override in unit tests (process TempDir is shared).
 nonisolated(unsafe) package var handoffTempDir: () -> String = {
@@ -90,47 +94,50 @@ package func claimPeerRun(
     withIntermediateDirectories: true
   )
 
-  for _ in 0..<200 {
+  for _ in 0..<handoffLockWaitAttempts {
     if tryTakeLock(paths.lockPath) {
       defer { try? FileManager.default.removeItem(atPath: paths.lockPath) }
       if let existing = readState(paths.idPath), !isIdStale(paths.idPath) {
-        writeState(paths.idPath, runId: existing.runId, refs: existing.refs + 1, claimed: existing.claimed + 1)
+        try writeState(paths.idPath, runId: existing.runId, refs: existing.refs + 1, claimed: existing.claimed + 1)
         return existing.runId
       }
       let runId = try await createRun()
-      writeState(paths.idPath, runId: runId, refs: 1, claimed: 1)
+      try writeState(paths.idPath, runId: runId, refs: 1, claimed: 1)
       return runId
     }
-    try? await Task.sleep(nanoseconds: 25_000_000)
+    try? await Task.sleep(nanoseconds: handoffLockWaitSleepNs)
   }
   throw ConfigError.message("peer handoff lock timeout")
 }
 
+/// - Parameter allowFinish: when false, decrement refs but never call `finish`
+///   or delete `.id` (soft-disable / unsent results — leave the run open).
 package func releasePeerRun(
   projectId: Int,
   runTitle: String,
   finish: (Int) async throws -> Void,
-  env: [String: String] = envMap()
+  env: [String: String] = envMap(),
+  allowFinish: Bool = true
 ) async throws -> Bool {
   let paths = handoffPaths(projectId: projectId, runTitle: runTitle, env: env)
 
-  for _ in 0..<200 {
+  for _ in 0..<handoffLockWaitAttempts {
     if tryTakeLock(paths.lockPath) {
       defer { try? FileManager.default.removeItem(atPath: paths.lockPath) }
       guard var state = readState(paths.idPath) else { return false }
       state.refs = max(0, state.refs - 1)
       let hold = peerCount(env) > 0 && state.claimed < peerCount(env)
-      if state.refs == 0 && !hold {
+      if state.refs == 0 && !hold && allowFinish {
         try await finish(state.runId)
         try? FileManager.default.removeItem(atPath: paths.idPath)
         return true
       }
-      writeState(paths.idPath, runId: state.runId, refs: state.refs, claimed: state.claimed)
+      try writeState(paths.idPath, runId: state.runId, refs: state.refs, claimed: state.claimed)
       return false
     }
-    try? await Task.sleep(nanoseconds: 25_000_000)
+    try? await Task.sleep(nanoseconds: handoffLockWaitSleepNs)
   }
-  return false
+  throw ConfigError.message("peer handoff lock timeout")
 }
 
 private struct HandoffState {
@@ -157,15 +164,15 @@ private func tryTakeLock(_ lockPath: String) -> Bool {
 
 private func exclusiveCreate(_ path: String) -> Bool {
   #if canImport(Darwin)
-  let fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0o600)
-  if fd >= 0 {
-    close(fd)
-    return true
-  }
-  return false
+    let fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0o600)
+    if fd >= 0 {
+      close(fd)
+      return true
+    }
+    return false
   #else
-  // Non-Darwin fallback — best effort only.
-  return FileManager.default.createFile(atPath: path, contents: Data(), attributes: nil)
+    // Non-Darwin fallback — best effort only.
+    return FileManager.default.createFile(atPath: path, contents: Data(), attributes: nil)
   #endif
 }
 
@@ -182,24 +189,25 @@ private func readState(_ path: String) -> HandoffState? {
   return HandoffState(runId: runId, refs: refs, claimed: claimed)
 }
 
-private func writeState(_ path: String, runId: Int, refs: Int, claimed: Int) {
+private func writeState(_ path: String, runId: Int, refs: Int, claimed: Int) throws {
   let text = "\(runId)\n\(refs)\n\(claimed)\n"
   let tmp = path + ".tmp"
-  try? text.write(toFile: tmp, atomically: true, encoding: .utf8)
+  try text.write(toFile: tmp, atomically: true, encoding: .utf8)
   try? FileManager.default.removeItem(atPath: path)
-  try? FileManager.default.moveItem(atPath: tmp, toPath: path)
+  try FileManager.default.moveItem(atPath: tmp, toPath: path)
 }
 
 private func isIdStale(_ path: String) -> Bool {
+  // Stat failure → not stale (Dart parity). Transient errors must not drop a live `.id`.
   guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-        let modified = attrs[.modificationDate] as? Date
-  else { return true }
+    let modified = attrs[.modificationDate] as? Date
+  else { return false }
   return Date().timeIntervalSince(modified) > handoffIdStaleAfter
 }
 
 private func isLockStale(_ path: String) -> Bool {
   guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-        let modified = attrs[.modificationDate] as? Date
-  else { return true }
+    let modified = attrs[.modificationDate] as? Date
+  else { return false }
   return Date().timeIntervalSince(modified) > handoffLockStaleAfter
 }

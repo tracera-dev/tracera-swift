@@ -22,7 +22,7 @@ let package = Package(
       swiftSettings: [
         // Payload dictionaries (`[String: Any]`) are not Sendable; keep
         // race-safe via actors / single-owner Tasks (parity with Dart/Go).
-        .swiftLanguageMode(.v5),
+        .swiftLanguageMode(.v5)
       ]
     ),
     .target(
@@ -35,7 +35,7 @@ let package = Package(
       dependencies: ["Tracera"],
       path: "Sources/TraceraXCUITest",
       swiftSettings: [
-        .swiftLanguageMode(.v5),
+        .swiftLanguageMode(.v5)
       ]
     ),
   ]

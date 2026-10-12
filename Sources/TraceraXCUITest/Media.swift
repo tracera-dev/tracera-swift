@@ -3,13 +3,13 @@ import Tracera
 import XCTest
 
 #if os(macOS)
-import AppKit
-import CoreGraphics
-import ScreenCaptureKit
+  import AppKit
+  import CoreGraphics
+  import ScreenCaptureKit
 #endif
 
 #if canImport(XCUIAutomation) && !os(macOS)
-import XCUIAutomation
+  import XCUIAutomation
 #endif
 
 /// Screenshot capture policy for XCUITest (default off).
@@ -96,111 +96,111 @@ func captureHierarchy(fileName: String, into ctx: TestContext) -> Bool {
 
 private func screenshotPNGData() -> Data? {
   #if os(macOS)
-  return macScreenshotPNG()
+    return macScreenshotPNG()
   #elseif canImport(XCUIAutomation)
-  return xcuiScreenshotPNG()
+    return xcuiScreenshotPNG()
   #else
-  return nil
+    return nil
   #endif
 }
 
 private func hierarchyText() -> String? {
   #if os(macOS)
-  return macWindowListText()
+    return macWindowListText()
   #elseif canImport(XCUIAutomation)
-  return xcuiHierarchyText()
+    return xcuiHierarchyText()
   #else
-  return nil
+    return nil
   #endif
 }
 
 #if canImport(XCUIAutomation) && !os(macOS)
-private func xcuiScreenshotPNG() -> Data? {
-  let work: () -> Data? = {
-    let shot = XCUIScreen.main.screenshot()
-    return shot.pngRepresentation
+  private func xcuiScreenshotPNG() -> Data? {
+    let work: () -> Data? = {
+      let shot = XCUIScreen.main.screenshot()
+      return shot.pngRepresentation
+    }
+    if Thread.isMainThread {
+      return work()
+    }
+    var captured: Data?
+    DispatchQueue.main.sync { captured = work() }
+    return captured
   }
-  if Thread.isMainThread {
-    return work()
-  }
-  var captured: Data?
-  DispatchQueue.main.sync { captured = work() }
-  return captured
-}
 
-private func xcuiHierarchyText() -> String? {
-  let work: () -> String? = {
-    let raw = XCUIApplication().debugDescription
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : raw
+  private func xcuiHierarchyText() -> String? {
+    let work: () -> String? = {
+      let raw = XCUIApplication().debugDescription
+      let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : raw
+    }
+    if Thread.isMainThread {
+      return work()
+    }
+    var captured: String?
+    DispatchQueue.main.sync { captured = work() }
+    return captured
   }
-  if Thread.isMainThread {
-    return work()
-  }
-  var captured: String?
-  DispatchQueue.main.sync { captured = work() }
-  return captured
-}
 #endif
 
 #if os(macOS)
-private func macScreenshotPNG() -> Data? {
-  if #available(macOS 14.0, *) {
-    return scScreenshotPNG()
-  }
-  return nil
-}
-
-@available(macOS 14.0, *)
-private func scScreenshotPNG() -> Data? {
-  final class Box: @unchecked Sendable {
-    var data: Data?
-  }
-  let box = Box()
-  let sem = DispatchSemaphore(value: 0)
-  Task.detached {
-    defer { sem.signal() }
-    do {
-      let content = try await SCShareableContent.excludingDesktopWindows(
-        false,
-        onScreenWindowsOnly: true
-      )
-      guard let display = content.displays.first else { return }
-      let filter = SCContentFilter(display: display, excludingWindows: [])
-      let config = SCStreamConfiguration()
-      config.width = display.width
-      config.height = display.height
-      config.showsCursor = false
-      let image = try await SCScreenshotManager.captureImage(
-        contentFilter: filter,
-        configuration: config
-      )
-      let rep = NSBitmapImageRep(cgImage: image)
-      box.data = rep.representation(using: .png, properties: [:])
-    } catch {
-      box.data = nil
+  private func macScreenshotPNG() -> Data? {
+    if #available(macOS 14.0, *) {
+      return scScreenshotPNG()
     }
-  }
-  _ = sem.wait(timeout: .now() + 15)
-  return box.data
-}
-
-private func macWindowListText() -> String? {
-  let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-  guard
-    let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]],
-    !info.isEmpty
-  else {
     return nil
   }
-  var lines: [String] = []
-  for w in info.prefix(50) {
-    let owner = w[kCGWindowOwnerName as String] as? String ?? ""
-    let name = w[kCGWindowName as String] as? String ?? ""
-    let layer = w[kCGWindowLayer as String] as? Int ?? 0
-    lines.append("\(owner) | \(name) | layer=\(layer)")
+
+  @available(macOS 14.0, *)
+  private func scScreenshotPNG() -> Data? {
+    final class Box: @unchecked Sendable {
+      var data: Data?
+    }
+    let box = Box()
+    let sem = DispatchSemaphore(value: 0)
+    Task.detached {
+      defer { sem.signal() }
+      do {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+          false,
+          onScreenWindowsOnly: true
+        )
+        guard let display = content.displays.first else { return }
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let config = SCStreamConfiguration()
+        config.width = display.width
+        config.height = display.height
+        config.showsCursor = false
+        let image = try await SCScreenshotManager.captureImage(
+          contentFilter: filter,
+          configuration: config
+        )
+        let rep = NSBitmapImageRep(cgImage: image)
+        box.data = rep.representation(using: .png, properties: [:])
+      } catch {
+        box.data = nil
+      }
+    }
+    _ = sem.wait(timeout: .now() + 15)
+    return box.data
   }
-  let joined = lines.joined(separator: "\n")
-  return joined.isEmpty ? nil : joined
-}
+
+  private func macWindowListText() -> String? {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard
+      let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]],
+      !info.isEmpty
+    else {
+      return nil
+    }
+    var lines: [String] = []
+    for w in info.prefix(50) {
+      let owner = w[kCGWindowOwnerName as String] as? String ?? ""
+      let name = w[kCGWindowName as String] as? String ?? ""
+      let layer = w[kCGWindowLayer as String] as? Int ?? 0
+      lines.append("\(owner) | \(name) | layer=\(layer)")
+    }
+    let joined = lines.joined(separator: "\n")
+    return joined.isEmpty ? nil : joined
+  }
 #endif

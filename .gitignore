@@ -6,3 +6,7 @@ DerivedData/
 *.xcodeproj
 *.xcworkspace
 .DS_Store
+
+# iOS sample-app e2e (xcodegen + xcodebuild)
+e2e/ios/.derivedData/
+e2e/ios/.artifacts-ios-xcodebuild.log

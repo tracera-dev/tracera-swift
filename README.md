@@ -80,7 +80,7 @@ Task {
 
 ## Parameterized
 
-Bind name templates (`{param}` / `{0}`) live on the Swift Testing runner. See that product’s README.
+Bind name templates (`{param}` / `{0}`) expand only on **TraceraTesting** when Swift Testing supplies arguments. XCUITest names stay literal (imperative `Tracera.testCase` or the XCTest method name). Mid-body `Tracera.testCase(…, name)` is always literal.
 
 ## Several test processes
 

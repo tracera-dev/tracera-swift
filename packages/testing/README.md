@@ -13,16 +13,6 @@ Tracera Autotest adapter for [Swift Testing](https://developer.apple.com/xcode/s
 
 How-to: [Swift Testing](https://tracera.dev/docs/swift-testing). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters).
 
-Call `install()` once. If you bind with `.traceraId` or `.tracera`, those traits call `install()` for you:
-
-```swift
-import Testing
-import Tracera
-import TraceraTesting
-
-install()
-```
-
 ## Bind
 
 Preferred declarative bind:
@@ -35,6 +25,12 @@ func checkout() {
 
 @Test("login as {user}", .traceraId(42), arguments: ["alice", "bob"])
 func login(user: String) {
+  // …
+}
+
+// Keep the Swift Testing display name; report a templated `autotestName`:
+@Test("login", .traceraId(42, name: "login as {user}"), arguments: ["alice", "bob"])
+func loginNamed(user: String) {
   // …
 }
 ```
@@ -104,11 +100,16 @@ Task {
 
 ## Parameterized
 
-Swift Testing arguments expand into separate cases. Put `{param}` / `{0}` / named placeholders in the `@Test("…")` display name so each row gets a distinct `autotestName`:
+Each `arguments` row is a separate case. Put placeholders such as `{user}` or `{0}` in the `@Test("…")` title, or in `.traceraId(…, name:)`, so each row gets its own `autotestName`. A static `name:` with no placeholders is the same on every row:
 
 ```swift
 @Test("login as {user}", .traceraId(7), arguments: ["alice", "bob"])
 func login(user: String) {
+  Tracera.step("sign in") { /* ... */ }
+}
+
+@Test("login", .traceraId(7, name: "login as {user}"), arguments: ["alice", "bob"])
+func loginNamed(user: String) {
   Tracera.step("sign in") { /* ... */ }
 }
 ```

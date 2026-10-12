@@ -49,18 +49,23 @@ package func parseDotenv(_ text: String) -> [String: String] {
 }
 
 package func findNearestDotenv(cwd: String) -> String? {
-  var dir = URL(fileURLWithPath: cwd, isDirectory: true)
-  let root = URL(fileURLWithPath: "/", isDirectory: true)
+  var dir = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+  let root = URL(fileURLWithPath: "/", isDirectory: true).standardizedFileURL
   // `homeDirectoryForCurrentUser` is unavailable on iOS — use NSHomeDirectory.
   let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
   for _ in 0..<dotenvMaxDepth {
+    // Never read `~/.env` or `/.env` (JS/Dart parity).
+    if dir.path == root.path || dir.path == home.path { return nil }
     let candidate = dir.appendingPathComponent(".env")
-    if FileManager.default.isReadableFile(atPath: candidate.path) {
+    var isDir: ObjCBool = false
+    if FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDir),
+      !isDir.boolValue,
+      FileManager.default.isReadableFile(atPath: candidate.path)
+    {
       return candidate.path
     }
     let parent = dir.deletingLastPathComponent().standardizedFileURL
     if parent.path == dir.path { break }
-    if parent.path == root.path || parent.path == home.path { break }
     dir = parent
   }
   return nil
@@ -73,7 +78,7 @@ package func mergeEnvWithDotenv(
 ) -> [String: String] {
   var out = processEnv
   guard let path = findNearestDotenv(cwd: cwd),
-        let data = try? String(contentsOfFile: path, encoding: .utf8)
+    let data = try? String(contentsOfFile: path, encoding: .utf8)
   else { return out }
   for (key, value) in parseDotenv(data) where key.hasPrefix("TRACERA_") {
     let existing = out[key] ?? ""

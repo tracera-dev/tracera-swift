@@ -60,9 +60,9 @@ package final class Client: @unchecked Sendable {
     }
     let caps = app.capabilities
     guard caps?.autotestCreateRun == true,
-          caps?.autotestFinishRun == true,
-          caps?.autotestResultsBatch == true,
-          caps?.testResultEnvVars == true
+      caps?.autotestFinishRun == true,
+      caps?.autotestResultsBatch == true,
+      caps?.testResultEnvVars == true
     else {
       throw ConfigError.message(
         "server missing required API capabilities (create/finish run, results batch, or result envVars)"
@@ -105,7 +105,9 @@ package final class Client: @unchecked Sendable {
     return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
   }
 
-  package func uploadBlob(fileName: String, mimeType: String, path: String?, data: Data?) async throws -> BlobUploadResult {
+  package func uploadBlob(fileName: String, mimeType: String, path: String?, data: Data?) async throws
+    -> BlobUploadResult
+  {
     try await uploadBlob(
       BlobFile(fileName: fileName, mimeType: mimeType, path: path, data: data)
     )
@@ -190,10 +192,27 @@ package final class Client: @unchecked Sendable {
     case .data(let body):
       req.httpBody = body
       (respData, resp) = try await session.data(for: req)
-    case .stream(let stream):
-      // Stream head+file+tail — never stage a full-size `.multipart` temp.
-      req.httpBodyStream = stream
-      (respData, resp) = try await session.data(for: req)
+    case .stream(let source):
+      // Custom InputStream subclasses are unreliable as `httpBodyStream`.
+      // Pump through a bound pair so URLSession reads a real CF stream while
+      // we still stream head+file+tail (no full-size `.multipart` temp).
+      var input: InputStream?
+      var output: OutputStream?
+      Stream.getBoundStreams(withBufferSize: 256 * 1024, inputStream: &input, outputStream: &output)
+      guard let input, let output else {
+        throw ConfigError.message("attachment upload failed: could not open bound stream")
+      }
+      let pump = Task.detached {
+        pumpMultipart(from: source, into: output)
+      }
+      req.httpBodyStream = input
+      do {
+        (respData, resp) = try await session.data(for: req)
+      } catch {
+        pump.cancel()
+        throw error
+      }
+      _ = await pump.result
     }
     try throwIfHTTPError(resp, data: respData)
     return try JSONDecoder().decode(BlobUploadResult.self, from: respData)
@@ -238,7 +257,10 @@ private func throwIfHTTPError(_ resp: URLResponse, data: Data) throws {
 /// Missing/unreadable path and non-429 4xx fail immediately; 5xx / 429 /
 /// transient network errors retry up to ``uploadMaxAttempts``.
 package func isRetryableUploadError(_ error: Error) -> Bool {
+  if error is CancellationError { return false }
   if isMissingPathError(error) { return false }
+  let ns = error as NSError
+  if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return false }
   let message = "\(error)"
   if message.range(of: #"HTTP 5\d\d"#, options: .regularExpression) != nil { return true }
   if message.contains("HTTP 429") { return true }
@@ -253,16 +275,49 @@ package func isRetryableUploadError(_ error: Error) -> Bool {
 }
 
 private func isMissingPathError(_ error: Error) -> Bool {
-  let ns = error as NSError
-  if ns.domain == NSPOSIXErrorDomain && (ns.code == Int(ENOENT) || ns.code == Int(EACCES)) {
-    return true
-  }
-  if ns.domain == NSCocoaErrorDomain
-    && (ns.code == NSFileReadNoSuchFileError || ns.code == NSFileReadNoPermissionError)
-  {
-    return true
+  var current: NSError? = error as NSError
+  var seen = Set<ObjectIdentifier>()
+  while let ns = current {
+    let id = ObjectIdentifier(ns)
+    if seen.contains(id) { break }
+    seen.insert(id)
+    if ns.domain == NSPOSIXErrorDomain && (ns.code == Int(ENOENT) || ns.code == Int(EACCES)) {
+      return true
+    }
+    if ns.domain == NSCocoaErrorDomain
+      && (ns.code == NSFileReadNoSuchFileError || ns.code == NSFileReadNoPermissionError)
+    {
+      return true
+    }
+    current = ns.userInfo[NSUnderlyingErrorKey] as? NSError
   }
   return false
+}
+
+/// Copies a path multipart `InputStream` into a bound `OutputStream` for URLSession.
+private func pumpMultipart(from source: InputStream, into output: OutputStream) {
+  source.open()
+  output.open()
+  defer {
+    source.close()
+    output.close()
+  }
+  let bufSize = 64 * 1024
+  let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
+  defer { buf.deallocate() }
+  while source.hasBytesAvailable {
+    if Task.isCancelled { return }
+    let n = source.read(buf, maxLength: bufSize)
+    if n < 0 { return }
+    if n == 0 { break }
+    var offset = 0
+    while offset < n {
+      if Task.isCancelled { return }
+      let written = output.write(buf + offset, maxLength: n - offset)
+      if written <= 0 { return }
+      offset += written
+    }
+  }
 }
 
 /// Drop `… failed: ` prefix so retry lines do not repeat the label (JS/Python/JVM parity).

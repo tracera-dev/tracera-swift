@@ -15,6 +15,8 @@ package final class Session: @unchecked Sendable {
   private nonisolated(unsafe) var _lastError = ""
   private nonisolated(unsafe) var _failedReport = 0
   private nonisolated(unsafe) var _unsentResults = 0
+  /// Per-row transport failure counts — only the first failure bumps `failedReport`.
+  private nonisolated(unsafe) var transportFailures: [String: Int] = [:]
 
   package init(
     client: Client,
@@ -35,37 +37,44 @@ package final class Session: @unchecked Sendable {
   }
 
   package var lastError: String {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return _lastError
   }
 
   package var failedReport: Int {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return _failedReport
   }
 
   package var unsentResults: Int {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return _unsentResults
   }
 
   package func setLastError(_ message: String) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     _lastError = message
   }
 
   package func noteFailedReport(_ n: Int) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     _failedReport += n
   }
 
   package func clearOneFailedReport() {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     if _failedReport > 0 { _failedReport -= 1 }
   }
 
   package func noteUnsentResults(_ n: Int) {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     _unsentResults += n
   }
 
@@ -76,22 +85,31 @@ package final class Session: @unchecked Sendable {
   @discardableResult
   package func uploadBatch(_ rawItems: [[String: Any]]) async -> [[String: Any]] {
     guard reportingEnabled else {
-      rawItems.forEach { discardPendingBlobs($0) }
-      return []
+      // Keep rows + blobs so `pendingCount` stays > 0 and peers leave the run open.
+      return rawItems
     }
     var wireItems: [[String: Any]] = []
+    var tokens: [String] = []
+    var originals: [[String: Any]] = []
     for item in rawItems {
-      if let prepared = prepareItem(item) {
-        wireItems.append(prepared)
-      }
+      let token =
+        (item["__traceraTransportToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        ?? UUID().uuidString
+      guard let prepared = prepareItem(item) else { continue }
+      var forWire = prepared
+      forWire.removeValue(forKey: "__traceraTransportToken")
+      wireItems.append(forWire)
+      tokens.append(token)
+      var kept = item
+      kept["__traceraTransportToken"] = token
+      originals.append(kept)
     }
     guard !wireItems.isEmpty else { return [] }
     logDebug("Tracera: sent \(wireItems.count) result(s)")
     do {
       let res = try await client.postResultsBatch(testRunId: testRunId, items: wireItems)
       consecutiveBatchFails = 0
-      // Undo batch-level transport failure counts if a prior attempt requeued these.
-      for _ in 0..<wireItems.count { clearOneFailedReport() }
+      for token in tokens { noteTransportSuccess(token) }
       if let rows = res["results"] as? [[String: Any]] {
         for row in rows {
           let ok = row["ok"] as? Bool ?? true
@@ -114,7 +132,7 @@ package final class Session: @unchecked Sendable {
     } catch {
       consecutiveBatchFails += 1
       setLastError("\(error)")
-      noteFailedReport(wireItems.count)
+      for token in tokens { noteTransportFailure(token) }
       logError("Tracera: \(error) — requeued")
       if consecutiveBatchFails >= consecutiveBatchFailLimit {
         reportingEnabled = false
@@ -122,8 +140,24 @@ package final class Session: @unchecked Sendable {
           "Tracera: stopped reporting after \(consecutiveBatchFailLimit) failed batch uploads"
         )
       }
-      return wireItems
+      return originals
     }
+  }
+
+  private func noteTransportSuccess(_ token: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard (transportFailures[token] ?? 0) > 0 else { return }
+    if _failedReport > 0 { _failedReport -= 1 }
+    transportFailures.removeValue(forKey: token)
+  }
+
+  private func noteTransportFailure(_ token: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    let n = (transportFailures[token] ?? 0) + 1
+    transportFailures[token] = n
+    if n == 1 { _failedReport += 1 }
   }
 
   private func prepareItem(_ payload: [String: Any]) -> [String: Any]? {
@@ -149,6 +183,7 @@ package final class Session: @unchecked Sendable {
     }
     out.removeValue(forKey: "hasFailedStep")
     out.removeValue(forKey: "hasStepError")
+    out.removeValue(forKey: "__traceraTransportToken")
 
     if (out["result"] as? String) == "Skipped" {
       out["setup"] = [[String: Any]]()
@@ -199,6 +234,10 @@ package func failRequired(_ message: String) -> Never {
 }
 
 package func beginReporting(_ state: ReporterState) async {
+  // Install may time out waiting on this call while the Task keeps running —
+  // never open a second owned run for the same ReporterState.
+  if state.session != nil || state.softDisabled { return }
+
   let env = mergeEnvWithDotenv()
   setLogLevel(env["TRACERA_LOG_LEVEL"])
   let requireReport = parseBool(env["TRACERA_REQUIRE_REPORT"], fallback: false)
@@ -317,7 +356,7 @@ package func enqueueResult(_ state: ReporterState?, _ item: PendingResult?) {
     // Synchronous schedule — outstanding work is visible to drain immediately.
     pool.schedule(report)
   } else {
-    Task {
+    Task.detached {
       do { try await report() } catch {
         logDebug("Tracera: upload job failed: \(error)")
       }
@@ -338,23 +377,30 @@ package func endReporting(_ state: ReporterState) async {
   guard let session = state.session else { return }
 
   let left = await (state.buffer?.pendingCount() ?? 0) + session.unsentResults
-  if left > 0 {
-    logError("Tracera: \(left) result(s) not uploaded — leaving test run open")
-  } else if session.peerHandoff {
+  let leaveOpen = left > 0 || !session.reportingEnabled
+  if leaveOpen {
+    if left > 0 {
+      logError("Tracera: \(left) result(s) not uploaded — leaving test run open")
+    } else {
+      logError("Tracera: reporting disabled — leaving test run open")
+    }
+  }
+  if session.peerHandoff {
     let env = mergeEnvWithDotenv()
     do {
       _ = try await releasePeerRun(
         projectId: session.config.projectId,
         runTitle: session.config.runTitle,
         finish: { id in try await session.client.finishRun(id) },
-        env: env
+        env: env,
+        allowFinish: !leaveOpen
       )
     } catch {
       session.setLastError("\(error)")
       session.noteFailedReport(1)
       logError("Tracera: peer finish failed: \(error)")
     }
-  } else if session.ownedByAdapter && session.reportingEnabled {
+  } else if !leaveOpen && session.ownedByAdapter && session.reportingEnabled {
     do {
       try await session.client.finishRun(session.testRunId)
     } catch {

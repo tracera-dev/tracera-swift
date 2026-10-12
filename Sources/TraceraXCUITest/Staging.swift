@@ -30,7 +30,8 @@ func writeMediaTemp(data: Data, fileName: String) -> String? {
   } catch {
     return nil
   }
-  let safe = fileName
+  let safe =
+    fileName
     .replacingOccurrences(of: "/", with: "_")
     .replacingOccurrences(of: "\\", with: "_")
   let url = dir.appendingPathComponent("\(UUID().uuidString.lowercased())-\(safe)")
