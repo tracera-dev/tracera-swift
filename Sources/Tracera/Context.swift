@@ -9,10 +9,14 @@ public enum StepSection: String, Sendable, CaseIterable {
 
 /// References an uploaded blob on a step or on the result.
 public struct AttachmentMeta: Sendable {
+  /// Tracera attachment id (or `pending:…` before upload).
   public var attachmentId: String
+  /// Optional display file name on the result / step.
   public var fileName: String?
+  /// Optional MIME type (guessed from the name when omitted on upload).
   public var mimeType: String?
 
+  /// Creates a meta for an already-uploaded (or pending) blob.
   public init(attachmentId: String, fileName: String? = nil, mimeType: String? = nil) {
     self.attachmentId = attachmentId
     self.fileName = fileName
@@ -73,6 +77,7 @@ private func emptyPmDoc(_ text: String) -> [String: Any] {
 
 /// Active test pin: bind, section, step tree and extras.
 public final class TestContext: @unchecked Sendable {
+  /// Bound Tracera test case id (`0` / unset when unbound).
   public var testCaseId: Int
   /// Current lifecycle section. Mutate only via plugin `setPhase` (runners).
   public internal(set) var section: StepSection = .test
@@ -84,6 +89,8 @@ public final class TestContext: @unchecked Sendable {
   private var hasFailedStep = false
   private var hasStepError = false
   private var skipped = false
+  /// Set when imperative bind aborts for attach-scope — finish must not report.
+  private var attachScopeAbort = false
   private var stepStack: [StepNode] = []
   private var roots: [StepSection: [StepNode]] = [
     .setup: [], .test: [], .teardown: [],
@@ -97,6 +104,7 @@ public final class TestContext: @unchecked Sendable {
     self.section = section
   }
 
+  /// Result display name (native title when empty; capped at 128).
   public var autotestName: String {
     get {
       lock.lock()
@@ -141,10 +149,27 @@ public final class TestContext: @unchecked Sendable {
     return skipped
   }
 
+  /// True after out-of-attach-scope imperative bind — do not upload a card.
+  package var isAttachScopeAbort: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return attachScopeAbort
+  }
+
   package func setTestCaseId(_ id: Int) {
     lock.lock()
     defer { lock.unlock() }
     testCaseId = id
+    // Successful in-scope bind clears a prior attach abort on the same pin.
+    attachScopeAbort = false
+  }
+
+  /// Clears the result name and marks attach abort (Go: no bind + no Cleanup report).
+  package func markAttachScopeAbort() {
+    lock.lock()
+    defer { lock.unlock() }
+    attachScopeAbort = true
+    _autotestName = ""
   }
 
   package func recordFailure(_ text: String) {
@@ -170,7 +195,7 @@ public final class TestContext: @unchecked Sendable {
       resultComment = appendText(resultComment, cleaned)
     }
     var pendingIds: [String] = []
-    func collect(_ nodes: [StepNode]) {
+    func collect(_ nodes: some Collection<StepNode>) {
       for node in nodes {
         for att in node.attachments {
           if let id = att["attachmentId"] as? String, id.hasPrefix("pending:") {
@@ -324,7 +349,7 @@ public final class TestContext: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     /// Flat preorder (parent then children) — same wire shape as JS/Go/Dart.
-    func flatten(_ nodes: [StepNode]) -> [[String: Any]] {
+    func flatten(_ nodes: some Collection<StepNode>) -> [[String: Any]] {
       var out: [[String: Any]] = []
       for node in nodes {
         var row: [String: Any] = [

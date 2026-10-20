@@ -102,6 +102,13 @@ final class TraceraXCTestObserver: NSObject, XCTestObservation {
       Thread.current.threadDictionary[Self.tlsKey] = nil
     }
 
+    // Out-of-attach-scope imperative bind — no card (name cleared; Go Cleanup-after parity).
+    if state.ctx.isAttachScopeAbort {
+      clearContext(state.ctx)
+      discardPendingBlobs(state.ctx.snapshotPayload())
+      return
+    }
+
     var result = state.result
     if testCase.testRun?.hasSucceeded == false { result = "Failed" }
     if state.ctx.payloadHasFailedStep || state.ctx.hasResultError { result = "Failed" }

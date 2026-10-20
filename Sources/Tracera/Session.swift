@@ -163,13 +163,18 @@ package final class Session: @unchecked Sendable {
   private func prepareItem(_ payload: [String: Any]) -> [String: Any]? {
     var out = payload
     let testCaseId = payload["testCaseId"] as? Int ?? 0
-    guard testCaseId > 0 else {
+    let name = (payload["autotestName"] as? String) ?? ""
+    guard shouldReport(testCaseId: testCaseId, autotestName: name) else {
       discardPendingBlobs(payload)
       return nil
     }
     out["isAutomated"] = true
     out["testRunId"] = testRunId
-    out["testCaseId"] = testCaseId
+    if testCaseId > 0 {
+      out["testCaseId"] = testCaseId
+    } else {
+      out["testCaseId"] = NSNull()
+    }
 
     // Drop any leftover pending slots (should already be resolved on the pool).
     out["setup"] = scrubPendingSteps(payload["setup"] as? [[String: Any]] ?? [])
@@ -270,6 +275,7 @@ package func beginReporting(_ state: ReporterState) async {
   if peerLabel.isEmpty { peerLabel = peerWorkerLabel(env) }
 
   var testRunId = config.testRunId
+  let envAttach = testRunId > 0
   var owned = false
   var peerHandoff = false
   do {
@@ -294,6 +300,18 @@ package func beginReporting(_ state: ReporterState) async {
     state.softDisabled = true
     client.close()
     return
+  }
+
+  if envAttach {
+    let scope = await client.fetchAttachScope(testRunId: testRunId)
+    setAttachFilter(scope)
+    if let scope {
+      logDebug(
+        "Tracera: attach-scope loaded (\(scope.rootTestCaseIds.count) roots)"
+      )
+    }
+  } else {
+    setAttachFilter(nil)
   }
 
   let session = Session(
@@ -326,9 +344,11 @@ package func enqueueResult(_ state: ReporterState?, _ item: PendingResult?) {
   let session = state?.session
   let buffer = state?.buffer
   let testCaseId = item.ctx?.testCaseId ?? (item.payload?["testCaseId"] as? Int ?? 0)
-  if testCaseId <= 0 {
-    let label = (item.ctx?.autotestName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    logDebug("Tracera: skip report — no testCaseId (\(label.isEmpty ? "unbound" : label))")
+  let autotestName = item.ctx?.autotestName ?? ""
+  if !shouldReport(testCaseId: testCaseId, autotestName: autotestName) {
+    if testCaseId > 0 {
+      logAttachSkipReport(testCaseId: testCaseId, label: autotestName)
+    }
     discardPendingBlobs(item.payload)
     return
   }

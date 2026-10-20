@@ -25,6 +25,12 @@ public struct TraceraIdTrait: TestTrait, SuiteTrait, TestScoping, Sendable {
     performing function: @Sendable () async throws -> Void
   ) async throws {
     install()
+    if !isAllowed(testCaseId) {
+      // Do not `throw` / `skip` out of provideScope — Swift Testing records that
+      // as a failed test. Skip execution only (no report card for out-of-scope).
+      logAttachSkipExecution(testCaseId: testCaseId)
+      return
+    }
 
     let params = bindParams(from: testCase, test: test)
     // Explicit `name:` wins; otherwise expand placeholders in `@Test("…")`

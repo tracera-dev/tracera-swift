@@ -2,11 +2,11 @@
 
 Tracera Autotest adapter core for Swift (HTTP, flush, log, dotenv, Env, TaskLocal context).
 
-**Requires Swift ≥ 6** (macOS 15 / Xcode 16).
+**Tested on Swift 6–6.4** (macOS 15–27 / Xcode 16–27).
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "0.1.0"),
+.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "1.0.0"),
 // …
 .product(name: "Tracera", package: "tracera-swift"),
 ```
@@ -22,8 +22,8 @@ Pick a runner product unless you are writing a custom integration: `TraceraTesti
 Declarative bind lives on the runner (`.traceraId` trait). Inside a running test you can also rebind imperatively:
 
 ```swift
-Tracera.testCase(42)                    // id only — the runner supplies the name
-Tracera.testCase(42, "checkout flow")   // id + reported result name
+try Tracera.testCase(42)                    // id only — the runner supplies the name
+try Tracera.testCase(42, "checkout flow")   // id + reported result name
 ```
 
 ## Skip
@@ -80,7 +80,7 @@ Task {
 
 ## Parameterized
 
-Bind name templates (`{param}` / `{0}`) expand only on **TraceraTesting** when Swift Testing supplies arguments. XCUITest names stay literal (imperative `Tracera.testCase` or the XCTest method name). Mid-body `Tracera.testCase(…, name)` is always literal.
+Bind name templates (`{param}` / `{0}`) expand only on **TraceraTesting** when Swift Testing supplies arguments. XCUITest names stay literal (imperative `Tracera.testCase` or the XCTest method name). Mid-body `try Tracera.testCase(…, name)` is always literal.
 
 ## Several test processes
 
@@ -88,7 +88,7 @@ Usual case: one process, one test run — nothing extra to set.
 
 Only when **you** start several OS processes and want them in the **same** run: give each a different `TRACERA_PEER_WORKER` for that launch. The first process opens the run; the last closes it. You do not create the run by hand.
 
-Environment variables, run modes and `.env` lookup: [Autotest adapters](https://tracera.dev/docs/adapters).
+Environment variables, run modes and `.env` lookup: [Autotest adapters](https://tracera.dev/docs/adapters#environment).
 
 ## License
 

@@ -2,16 +2,16 @@
 
 Tracera Autotest adapter for XCTest / XCUITest.
 
-**Requires Swift ≥ 6**, **macOS ≥ 15** (or **iOS ≥ 18**), and **Xcode ≥ 16**, plus the XCTest / XCUIAutomation frameworks.
+**Tested on Swift 6–6.4**, **macOS 15–27** (or **iOS 18**), and **Xcode 16–27**, plus the XCTest / XCUIAutomation frameworks.
 
 ```swift
 // Package.swift (or Xcode package product)
-.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "0.1.0"),
+.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "1.0.0"),
 // …
 .product(name: "TraceraXCUITest", package: "tracera-swift"),
 ```
 
-How-to: [XCUITest](https://tracera.dev/docs/xcuitest). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters).
+How-to: [XCUITest](https://tracera.dev/docs/xcuitest). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters#environment).
 
 Subclass **`TraceraXCTestCase`** and call **`install()`** once in **`class func setUp()`**. Without `install()`, nothing is reported. Media capture defaults to off — pass modes only when you want automatic screenshots / hierarchy / logs (see Screenshots):
 
@@ -35,9 +35,9 @@ When you override **instance** `setUp` / `tearDown` (once per test — not `clas
 Bind with `Tracera.testCase` at the start of each test method:
 
 ```swift
-func testCheckout() {
-  Tracera.testCase(42)
-  // Tracera.testCase(42, "e2e/checkout")
+func testCheckout() throws {
+  try Tracera.testCase(42)
+  // try Tracera.testCase(42, "e2e/checkout")
   // …
 }
 ```
@@ -50,7 +50,7 @@ Use `skip("reason")` so the reason is added to the result as `comment`:
 
 ```swift
 func testCheckout() throws {
-  Tracera.testCase(42)
+  try Tracera.testCase(42)
   try skip("needs a seeded account")
 }
 ```
@@ -66,9 +66,9 @@ override func setUp() {
 }
 
 func testCheckout() throws {
-  Tracera.testCase(10)
-  try Tracera.step("tap checkout") {
-    try Tracera.step("nested leaf") { }
+  try Tracera.testCase(10)
+  Tracera.step("tap checkout") {
+    Tracera.step("nested leaf") { }
   }
 }
 
@@ -82,7 +82,7 @@ If you already have your own `XCTestCase` base class (Swift allows only one supe
 
 ## Comments, errors, and attachments
 
-`Tracera.comment`, `Tracera.error`, and the attachment helpers attach to the open step, or to the result when no step is open. Shared placement and `Tracera.error` rules: https://tracera.dev/docs/adapters.
+`Tracera.comment`, `Tracera.error`, and the attachment helpers attach to the open step, or to the result when no step is open. Shared placement and `Tracera.error` rules: [Autotest adapters](https://tracera.dev/docs/adapters#comments-errors-and-attachments).
 
 `Tracera.attachmentFile` takes a file path; `Tracera.attachmentBytes` takes a name and bytes (MIME type is optional). Attachments upload when the result is reported.
 
@@ -109,7 +109,7 @@ Task {
 
 ## Parameterized
 
-Use a literal `Tracera.testCase(id, name)` (or omit `name` → XCTest test name).
+Use a literal `try Tracera.testCase(id, name)` (or omit `name` → XCTest test name).
 
 ## Screenshots and media
 

@@ -46,6 +46,10 @@ public func install() {
   // Prefer host resolver over process fallback under in-process overlap
   // (Swift Testing may schedule concurrent cases; TaskLocal still wins).
   resolveHostContext = { resolveActiveContext() }
+  // Mid-body testCase(out-of-scope) → AttachScopeSkipError (ScopeRun discards).
+  setAttachScopeSkipHandler { reason in
+    throw AttachScopeSkipError(reason)
+  }
 
   if !atexitRegistered {
     atexitRegistered = true
@@ -151,6 +155,11 @@ func endActive(id: String) {
   guard let state else { return }
   clearContext(state.ctx)
 
+  if state.ctx.isAttachScopeAbort {
+    discardPendingBlobs(state.ctx.snapshotPayload())
+    return
+  }
+
   let item = PendingResult(ctx: state.ctx)
   item.payload = state.ctx.snapshotPayload()
   item.durationMinutes = durationMinutesFrom(elapsed: Date().timeIntervalSince(state.started))
@@ -166,4 +175,14 @@ func endActive(id: String) {
   // No SWIFT_TESTING_VERSION — toolchain-bundled; omit when peer is unresolved.
   item.envVars = mergeEnvVars()
   enqueueResult(reporter, item)
+}
+
+/// Drop pin without uploading (attach-scope abort — declarative early-return parity).
+func discardActive(id: String) {
+  activeLock.lock()
+  let state = activeByID.removeValue(forKey: id)
+  activeLock.unlock()
+  guard let state else { return }
+  clearContext(state.ctx)
+  discardPendingBlobs(state.ctx.snapshotPayload())
 }

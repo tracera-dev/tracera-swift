@@ -11,6 +11,8 @@ package struct AppCapabilities: Decodable, Sendable {
   package var autotestResultsBatch = false
   package var testResultEnvVars = false
   package var autotestBlobsBatch = false
+  /// `nil` when omitted (older server) — still attempt attach-scope GET.
+  package var autotestAttachScope: Bool?
 }
 
 package struct AppConfig: Decodable, Sendable {
@@ -31,13 +33,22 @@ package final class Client: @unchecked Sendable {
   private let session: URLSession
   private nonisolated(unsafe) var cachedApp: AppConfig?
 
-  package init(_ config: Config) {
+  package init(_ config: Config, session: URLSession? = nil) {
     self.config = config
-    let conf = URLSessionConfiguration.ephemeral
-    conf.timeoutIntervalForRequest = httpTimeout
-    conf.timeoutIntervalForResource = httpUploadTimeout
-    conf.httpMaximumConnectionsPerHost = 16
-    self.session = URLSession(configuration: conf)
+    if let session {
+      self.session = session
+    } else {
+      let conf = URLSessionConfiguration.ephemeral
+      conf.timeoutIntervalForRequest = httpTimeout
+      conf.timeoutIntervalForResource = httpUploadTimeout
+      conf.httpMaximumConnectionsPerHost = 16
+      self.session = URLSession(configuration: conf)
+    }
+  }
+
+  /// Seeds cached `/app-config` for unit tests (capability fail-open path).
+  package func setCachedAppForTests(_ app: AppConfig?) {
+    cachedApp = app
   }
 
   package func close() {
@@ -67,6 +78,35 @@ package final class Client: @unchecked Sendable {
       throw ConfigError.message(
         "server missing required API capabilities (create/finish run, results batch, or result envVars)"
       )
+    }
+  }
+
+  /// Nil when GET fails / capability missing — caller must not filter.
+  package func fetchAttachScope(testRunId: Int) async -> AttachScope? {
+    if let caps = cachedApp?.capabilities, caps.autotestAttachScope == false {
+      logWarn("Tracera: server has no autotestAttachScope — not filtering")
+      return nil
+    }
+    if let cached = readAttachScopeCache(projectId: config.projectId, testRunId: testRunId) {
+      return cached
+    }
+    do {
+      let data = try await request(
+        path: "/projects/\(config.projectId)/test-runs/\(testRunId)/autotest/attach-scope",
+        method: "GET",
+        body: nil,
+        json: true
+      )
+      let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+      guard let scope = parseAttachScope(json: json) else {
+        // Non-object body → fail-open (do not cache an empty allow-list).
+        return nil
+      }
+      writeAttachScopeCache(projectId: config.projectId, testRunId: testRunId, scope: scope)
+      return scope
+    } catch {
+      logWarn("Tracera: attach-scope GET failed: \(error) — not filtering")
+      return nil
     }
   }
 

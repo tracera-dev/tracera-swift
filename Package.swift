@@ -25,6 +25,7 @@ let package = Package(
         .swiftLanguageMode(.v5)
       ]
     ),
+    // TestScoping is Swift 6.1 / Xcode 16.3. Core and XCUITest stay on Swift 6.
     .target(
       name: "TraceraTesting",
       dependencies: ["Tracera"],

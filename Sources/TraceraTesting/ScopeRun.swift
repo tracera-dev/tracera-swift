@@ -24,6 +24,11 @@ func runTraceraScoped(
       if ctx.payloadHasFailedStep || ctx.hasResultError {
         markActiveFailed(id: activeId)
       }
+    } catch is AttachScopeSkipError {
+      // Out-of-attach-scope imperative bind — discard like declarative early return
+      // (no card). Do not rethrow — Testing would mark Failed.
+      discardActive(id: activeId)
+      return
     } catch let skip as TraceraSkipError {
       // `skip(_:)` already called `markSkipped(reason)` when a context was pinned;
       // empty reason avoids appending the comment twice (CancellationError path).

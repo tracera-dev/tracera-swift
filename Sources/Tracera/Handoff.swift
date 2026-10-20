@@ -82,11 +82,68 @@ private func peerCount(_ env: [String: String]) -> Int {
   return n
 }
 
+/// True when `pid` still exists (signal 0). EPERM ⇒ process exists.
+func processAlive(_ pid: Int) -> Bool {
+  guard pid > 0 else { return false }
+  #if canImport(Darwin)
+    let r = kill(pid_t(pid), 0)
+    if r == 0 { return true }
+    if errno == EPERM { return true }
+    return false
+  #else
+    return false
+  #endif
+}
+
+private struct HandoffState {
+  var runId: Int
+  var refs: Int
+  var claimed: Int
+  var pids: [Int]
+  var hasPidLine: Bool
+}
+
+private func parsePids(_ line: String?) -> [Int] {
+  guard let line, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+  var out: [Int] = []
+  for part in line.split(separator: ",") {
+    let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let n = Int(trimmed), n > 0 { out.append(n) }
+  }
+  return out
+}
+
+private func livePids(_ pids: [Int]) -> [Int] {
+  pids.filter { processAlive($0) }
+}
+
+private func removeOnePid(_ pids: [Int], pid: Int) -> [Int] {
+  guard let idx = pids.firstIndex(of: pid) else { return pids }
+  var next = pids
+  next.remove(at: idx)
+  return next
+}
+
+private func holdForLatePeers(claimed: Int, env: [String: String]) -> Bool {
+  let expected = peerCount(env)
+  return expected > 0 && claimed < expected
+}
+
+private func shouldAttachExisting(_ state: HandoffState, live: [Int], env: [String: String]) -> Bool {
+  if !live.isEmpty { return true }
+  return holdForLatePeers(claimed: state.claimed, env: env)
+}
+
+private func resolvedSelfPid(_ override: Int?) -> Int {
+  override ?? Int(ProcessInfo.processInfo.processIdentifier)
+}
+
 package func claimPeerRun(
   projectId: Int,
   runTitle: String,
   createRun: () async throws -> Int,
-  env: [String: String] = envMap()
+  env: [String: String] = envMap(),
+  pid: Int? = nil
 ) async throws -> Int {
   let paths = handoffPaths(projectId: projectId, runTitle: runTitle, env: env)
   try FileManager.default.createDirectory(
@@ -94,15 +151,31 @@ package func claimPeerRun(
     withIntermediateDirectories: true
   )
 
+  let me = resolvedSelfPid(pid)
   for _ in 0..<handoffLockWaitAttempts {
     if tryTakeLock(paths.lockPath) {
       defer { try? FileManager.default.removeItem(atPath: paths.lockPath) }
-      if let existing = readState(paths.idPath), !isIdStale(paths.idPath) {
-        try writeState(paths.idPath, runId: existing.runId, refs: existing.refs + 1, claimed: existing.claimed + 1)
-        return existing.runId
+      if let existing = readState(paths.idPath) {
+        if isIdStale(paths.idPath) {
+          try? FileManager.default.removeItem(atPath: paths.idPath)
+        } else {
+          let live = existing.hasPidLine ? livePids(existing.pids) : []
+          if shouldAttachExisting(existing, live: live, env: env) {
+            let pids = live + [me]
+            try writeState(
+              paths.idPath,
+              runId: existing.runId,
+              refs: pids.count,
+              claimed: existing.claimed + 1,
+              pids: pids
+            )
+            return existing.runId
+          }
+          try? FileManager.default.removeItem(atPath: paths.idPath)
+        }
       }
       let runId = try await createRun()
-      try writeState(paths.idPath, runId: runId, refs: 1, claimed: 1)
+      try writeState(paths.idPath, runId: runId, refs: 1, claimed: 1, pids: [me])
       return runId
     }
     try? await Task.sleep(nanoseconds: handoffLockWaitSleepNs)
@@ -117,33 +190,41 @@ package func releasePeerRun(
   runTitle: String,
   finish: (Int) async throws -> Void,
   env: [String: String] = envMap(),
-  allowFinish: Bool = true
+  allowFinish: Bool = true,
+  pid: Int? = nil
 ) async throws -> Bool {
   let paths = handoffPaths(projectId: projectId, runTitle: runTitle, env: env)
+  let me = resolvedSelfPid(pid)
 
   for _ in 0..<handoffLockWaitAttempts {
     if tryTakeLock(paths.lockPath) {
       defer { try? FileManager.default.removeItem(atPath: paths.lockPath) }
       guard var state = readState(paths.idPath) else { return false }
-      state.refs = max(0, state.refs - 1)
+      let withoutSelf =
+        state.hasPidLine
+        ? removeOnePid(livePids(state.pids), pid: me)
+        : []
+      state.refs = state.hasPidLine ? withoutSelf.count : max(0, state.refs - 1)
+      state.pids = state.hasPidLine ? withoutSelf : []
+      state.hasPidLine = true
       let hold = peerCount(env) > 0 && state.claimed < peerCount(env)
       if state.refs == 0 && !hold && allowFinish {
         try await finish(state.runId)
         try? FileManager.default.removeItem(atPath: paths.idPath)
         return true
       }
-      try writeState(paths.idPath, runId: state.runId, refs: state.refs, claimed: state.claimed)
+      try writeState(
+        paths.idPath,
+        runId: state.runId,
+        refs: state.refs,
+        claimed: state.claimed,
+        pids: state.pids
+      )
       return false
     }
     try? await Task.sleep(nanoseconds: handoffLockWaitSleepNs)
   }
   throw ConfigError.message("peer handoff lock timeout")
-}
-
-private struct HandoffState {
-  var runId: Int
-  var refs: Int
-  var claimed: Int
 }
 
 /// Exclusive create (`O_CREAT|O_EXCL`) — `FileManager.createFile` is not exclusive
@@ -186,11 +267,26 @@ private func readState(_ path: String) -> HandoffState? {
   if lines.count > 1, let r = Int(lines[1]), r >= 0 { refs = r }
   var claimed = max(refs, 1)
   if lines.count > 2, let c = Int(lines[2]), c >= 0 { claimed = c }
-  return HandoffState(runId: runId, refs: refs, claimed: claimed)
+  let hasPidLine = lines.count > 3
+  let pids = hasPidLine ? parsePids(String(lines[3])) : []
+  return HandoffState(
+    runId: runId,
+    refs: refs,
+    claimed: claimed,
+    pids: pids,
+    hasPidLine: hasPidLine
+  )
 }
 
-private func writeState(_ path: String, runId: Int, refs: Int, claimed: Int) throws {
-  let text = "\(runId)\n\(refs)\n\(claimed)\n"
+private func writeState(
+  _ path: String,
+  runId: Int,
+  refs: Int,
+  claimed: Int,
+  pids: [Int]
+) throws {
+  let pidLine = pids.map(String.init).joined(separator: ",")
+  let text = "\(runId)\n\(refs)\n\(claimed)\n\(pidLine)\n"
   let tmp = path + ".tmp"
   try text.write(toFile: tmp, atomically: true, encoding: .utf8)
   try? FileManager.default.removeItem(atPath: path)

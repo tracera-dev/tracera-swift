@@ -2,16 +2,16 @@
 
 Tracera Autotest adapter for [Swift Testing](https://developer.apple.com/xcode/swift-testing/).
 
-**Requires Swift ≥ 6** (macOS 15 / Xcode 16).
+**Tested on Swift 6.1–6.4** (macOS 15–27 / Xcode 16.3–27).
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "0.1.0"),
+.package(url: "https://github.com/tracera-dev/tracera-swift.git", from: "1.0.0"),
 // …
 .product(name: "TraceraTesting", package: "tracera-swift"),
 ```
 
-How-to: [Swift Testing](https://tracera.dev/docs/swift-testing). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters).
+How-to: [Swift Testing](https://tracera.dev/docs/swift-testing). Shared env / run mode: [Autotest adapters](https://tracera.dev/docs/adapters#environment).
 
 ## Bind
 
@@ -39,9 +39,9 @@ When the id is not a compile-time constant, open a pin with `.tracera` and bind 
 
 ```swift
 @Test("checkout", .tracera)
-func checkout() {
-  Tracera.testCase(42)
-  // Tracera.testCase(42, "e2e/checkout")
+func checkout() throws {
+  try Tracera.testCase(42)
+  // try Tracera.testCase(42, "e2e/checkout")
 }
 ```
 
@@ -64,18 +64,18 @@ Use `Tracera.step("…") { … }` (sync or `async`). Steps inside `setup` / `tea
 
 ```swift
 @Test("checkout", .traceraId(10))
-func checkout() throws {
-  try setup("open shop") {}
-  try Tracera.step("add item") {
+func checkout() {
+  setup("open shop") {}
+  Tracera.step("add item") {
     Tracera.step("nested leaf") {}
   }
-  try teardown("close shop") {}
+  teardown("close shop") {}
 }
 ```
 
 ## Comments, errors, and attachments
 
-`Tracera.comment`, `Tracera.error`, and attachments are added to the open step, or to the result when no step is open. `Tracera.attachmentFile` takes a file path; `Tracera.attachmentBytes` takes a name and bytes (MIME type is optional). Attachments upload when the result is reported. Shared placement and `Tracera.error` rules: https://tracera.dev/docs/adapters.
+`Tracera.comment`, `Tracera.error`, and attachments are added to the open step, or to the result when no step is open. `Tracera.attachmentFile` takes a file path; `Tracera.attachmentBytes` takes a name and bytes (MIME type is optional). Attachments upload when the result is reported. Shared placement and `Tracera.error` rules: [Autotest adapters](https://tracera.dev/docs/adapters#comments-errors-and-attachments).
 
 ```swift
 Tracera.comment("result-level note")

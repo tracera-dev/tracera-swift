@@ -51,6 +51,11 @@ public func install(
     reporter.peerWorker = peer
   }
 
+  // Mid-body testCase(out-of-scope) → XCTSkip (Observer finish + shouldReport drop).
+  setAttachScopeSkipHandler { reason in
+    throw XCTSkip(reason)
+  }
+
   let obs = TraceraXCTestObserver(
     reporter: reporter,
     screenshotMode: { screenshotMode },

@@ -9,7 +9,22 @@ import Foundation
 /// Customer how-to: https://tracera.dev/docs/adapters
 public enum Tracera {
   /// Binds the running test to a Tracera test case id, with an optional result name.
-  public static func testCase(_ testCaseId: Int, _ name: String? = nil) {
+  ///
+  /// Out-of-attach-scope bound ids abort execution (Go/Dart/JS parity): the runner
+  /// skip handler runs, or ``AttachScopeSkipError`` is thrown. Call with `try`.
+  /// Declarative ``Trait/traceraId(_:name:)`` skips before the body instead.
+  public static func testCase(_ testCaseId: Int, _ name: String? = nil) throws {
+    if testCaseId > 0 && !isAllowed(testCaseId) {
+      logAttachSkipExecution(testCaseId: testCaseId)
+      // Do not bind (Go parity). Clear name so Observer finish cannot upload Unknown.
+      if let ctx = getContext() {
+        ctx.markAttachScopeAbort()
+      }
+      if let handler = attachScopeSkipHandler {
+        try handler(attachOutOfScopeReason)
+      }
+      throw AttachScopeSkipError()
+    }
     guard let ctx = getContext() else { return }
     ctx.setTestCaseId(testCaseId)
     if let name, !name.isEmpty { ctx.autotestName = name }
@@ -26,10 +41,12 @@ public enum Tracera {
       ctx.endStep(failed: false)
       return value
     } catch {
-      // Mid-test `skip` marks the context then throws a runner-local error
-      // (`TraceraSkipError` / `XCTSkip`) core cannot name — close without fail.
-      // Bare `CancellationError` keeps the same non-fail close.
-      if ctx.isSkipped || error is CancellationError {
+      // Mid-test `skip` / attach abort marks the context then throws a runner-local
+      // error (`TraceraSkipError` / `XCTSkip` / ``AttachScopeSkipError``) — close
+      // without fail. Bare `CancellationError` keeps the same non-fail close.
+      if ctx.isSkipped || ctx.isAttachScopeAbort || error is CancellationError
+        || error is AttachScopeSkipError
+      {
         ctx.endStep(failed: false)
       } else {
         ctx.endStep(failed: true, errorMessage: formatFailureText(error))
@@ -48,7 +65,9 @@ public enum Tracera {
       ctx.endStep(failed: false)
       return value
     } catch {
-      if ctx.isSkipped || error is CancellationError {
+      if ctx.isSkipped || ctx.isAttachScopeAbort || error is CancellationError
+        || error is AttachScopeSkipError
+      {
         ctx.endStep(failed: false)
       } else {
         ctx.endStep(failed: true, errorMessage: formatFailureText(error))
@@ -74,13 +93,18 @@ public enum Tracera {
 
   /// Attaches a file from disk to the open step or result.
   public static func attachmentFile(_ path: String, mimeType: String? = nil) {
-    let name = URL(fileURLWithPath: path).lastPathComponent
+    // Soft: empty path must not register a pending slot (Go/Dart parity).
+    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    let name = URL(fileURLWithPath: trimmed).lastPathComponent
     let mime = mimeType ?? guessMimeType(fileName: name)
-    getContext()?.addPendingAttachment(fileName: name, mimeType: mime, path: path, data: nil)
+    getContext()?.addPendingAttachment(fileName: name, mimeType: mime, path: trimmed, data: nil)
   }
 
   /// Attaches in-memory bytes to the open step or result.
   public static func attachmentBytes(_ fileName: String, data: Data, mimeType: String? = nil) {
+    // Soft: empty body — no slot (JS/Python/JVM/.NET unified attachment parity).
+    guard !data.isEmpty else { return }
     let mime = mimeType ?? guessMimeType(fileName: fileName)
     getContext()?.addPendingAttachment(fileName: fileName, mimeType: mime, path: nil, data: data)
   }
