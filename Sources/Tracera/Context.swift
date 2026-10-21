@@ -87,6 +87,8 @@ public final class TestContext: @unchecked Sendable {
   private var resultComment = ""
   private var nextStepId = 1
   private var hasFailedStep = false
+  /// RecordFailure wrote result-level text. Soft addError does not set this.
+  private var resultFailureRecorded = false
   private var hasStepError = false
   private var skipped = false
   /// Set when imperative bind aborts for attach-scope — finish must not report.
@@ -142,6 +144,13 @@ public final class TestContext: @unchecked Sendable {
     return !resultError.isEmpty
   }
 
+  /// True when ``recordFailure`` wrote result-level text. Soft ``addError`` does not.
+  package var hasResultFailure: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return resultFailureRecorded
+  }
+
   /// True after ``markSkipped`` — used so skip teardown is not treated as a fail.
   package var isSkipped: Bool {
     lock.lock()
@@ -184,6 +193,7 @@ public final class TestContext: @unchecked Sendable {
       hasStepError = true
     } else {
       resultError = appendText(resultError, cleaned)
+      resultFailureRecorded = true
     }
   }
 

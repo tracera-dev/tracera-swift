@@ -42,7 +42,7 @@ func testCheckout() throws {
 }
 ```
 
-If `name` is omitted, `autotestName` takes the value of the XCTest test name. You can bind in instance `setUp` instead when several methods share one case id. A test that never binds reports nothing.
+If `name` is omitted, `autotestName` takes the value of the XCTest test name. You can bind in instance `setUp` instead when several methods share one case id. A test that never calls `Tracera.testCase` is still uploaded under the run’s **Unknown** folder, with the XCTest test name as `autotestName`.
 
 ## Skip
 

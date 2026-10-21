@@ -45,7 +45,7 @@ func checkout() throws {
 }
 ```
 
-A test that never binds reports nothing.
+A test with no Tracera trait reports nothing. `.tracera` without `Tracera.testCase` is still uploaded under **Unknown**, using the Swift Testing test name as `autotestName`.
 
 ## Skip
 

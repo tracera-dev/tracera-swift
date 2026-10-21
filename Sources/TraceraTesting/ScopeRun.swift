@@ -21,7 +21,7 @@ func runTraceraScoped(
     setPhase(.test)
     do {
       try await function()
-      if ctx.payloadHasFailedStep || ctx.hasResultError {
+      if ctx.payloadHasFailedStep || ctx.hasResultFailure {
         markActiveFailed(id: activeId)
       }
     } catch is AttachScopeSkipError {

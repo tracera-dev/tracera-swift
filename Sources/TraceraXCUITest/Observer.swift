@@ -111,7 +111,7 @@ final class TraceraXCTestObserver: NSObject, XCTestObservation {
 
     var result = state.result
     if testCase.testRun?.hasSucceeded == false { result = "Failed" }
-    if state.ctx.payloadHasFailedStep || state.ctx.hasResultError { result = "Failed" }
+    if state.ctx.payloadHasFailedStep || state.ctx.hasResultFailure { result = "Failed" }
     // Prefer our `skip(_:)` pin; stock `hasBeenSkipped` must not override a
     // real failure (XCTest may mark setUp throws as both failed and skipped).
     if state.ctx.isSkipped {

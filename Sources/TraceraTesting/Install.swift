@@ -168,7 +168,7 @@ func endActive(id: String) {
   var result = state.result
   if state.ctx.isSkipped {
     result = "Skipped"
-  } else if state.ctx.payloadHasFailedStep || state.ctx.hasResultError {
+  } else if state.ctx.payloadHasFailedStep || state.ctx.hasResultFailure {
     result = "Failed"
   }
   item.result = result
